@@ -3,28 +3,42 @@ const express = require("express");
 const app = express();
 const port = process.env.PORT || 10000;
 
-const base =
+const worker =
   "https://dry-wildflower-2347.leongcheekuan84.workers.dev";
+
+const renderBase =
+  "https://fmp-market-bridge.onrender.com";
 
 
 // ======================================================
-// 通用 Proxy
+// PROXY
 // ======================================================
 
 async function proxy(url, res) {
   try {
     const r = await fetch(url);
-    const body = Buffer.from(await r.arrayBuffer());
+
+    const body = Buffer.from(
+      await r.arrayBuffer()
+    );
 
     res.status(r.status);
 
     res.set(
       "Content-Type",
-      r.headers.get("content-type") || "application/json"
+      r.headers.get("content-type") ||
+      "application/json"
     );
 
-    res.set("Access-Control-Allow-Origin", "*");
-    res.set("Cache-Control", "no-store");
+    res.set(
+      "Access-Control-Allow-Origin",
+      "*"
+    );
+
+    res.set(
+      "Cache-Control",
+      "no-store"
+    );
 
     res.send(body);
 
@@ -40,63 +54,64 @@ async function proxy(url, res) {
 
 
 // ======================================================
-// EURUSD
-// ======================================================
-
-app.get("/eurusd", async (req, res) => {
-  await proxy(base + "/symbol=EURUSD", res);
-});
-
-
-// ======================================================
-// USDCHF
-// ======================================================
-
-app.get("/usdchf", async (req, res) => {
-  await proxy(base + "/symbol=USDCHF", res);
-});
-
-
-// ======================================================
-// XAUUSD
+// 原本已经验证成功的四个接口
 // ======================================================
 
 app.get("/xau", async (req, res) => {
-  await proxy(base + "/symbol=XAUUSD", res);
+
+  await proxy(
+    worker + "/symbol=XAUUSD",
+    res
+  );
+
 });
 
-
-// ======================================================
-// BTCUSD
-// ======================================================
 
 app.get("/btc", async (req, res) => {
-  await proxy(base + "/symbol=BTCUSD", res);
+
+  await proxy(
+    worker + "/symbol=BTCUSD",
+    res
+  );
+
+});
+
+
+app.get("/usdchf", async (req, res) => {
+
+  await proxy(
+    worker + "/symbol=USDCHF",
+    res
+  );
+
+});
+
+
+app.get("/eurusd", async (req, res) => {
+
+  await proxy(
+    worker + "/symbol=EURUSD",
+    res
+  );
+
 });
 
 
 // ======================================================
-// ALL
-//
-// 重点：
-// 每一个请求加入独立 cache-buster
-// 防止 Worker / CDN 把第一个 EURUSD response
-// 错误重复给其他 symbol
+// 读取 Render 自己已经验证成功的接口
 // ======================================================
 
-async function getSymbol(symbol) {
+async function readEndpoint(endpoint) {
 
   const url =
-    base +
-    "/symbol=" +
-    encodeURIComponent(symbol) +
-    "?_cb=" +
+    renderBase +
+    endpoint +
+    "?t=" +
     Date.now() +
     "-" +
     Math.random();
 
   const r = await fetch(url, {
-    method: "GET",
     headers: {
       "Accept": "application/json",
       "Cache-Control": "no-cache"
@@ -104,44 +119,81 @@ async function getSymbol(symbol) {
   });
 
   if (!r.ok) {
+
     throw new Error(
-      symbol + " upstream returned HTTP " + r.status
+      endpoint +
+      " returned HTTP " +
+      r.status
     );
+
   }
 
-  const data = await r.json();
-
-  // 防止 symbol 串线
-  if (
-    data.symbol &&
-    data.symbol.toUpperCase() !== symbol.toUpperCase()
-  ) {
-    throw new Error(
-      "Symbol mismatch: requested " +
-      symbol +
-      " but received " +
-      data.symbol
-    );
-  }
-
-  return data;
+  return await r.json();
 }
 
+
+// ======================================================
+// ALL
+// ======================================================
 
 app.get("/all", async (req, res) => {
 
   try {
 
-    // 顺序读取，避免四个请求互相串数据
-    const xau = await getSymbol("XAUUSD");
-    const btc = await getSymbol("BTCUSD");
-    const usdchf = await getSymbol("USDCHF");
-    const eurusd = await getSymbol("EURUSD");
+    const xau =
+      await readEndpoint("/xau");
 
-    res.set("Access-Control-Allow-Origin", "*");
-    res.set("Cache-Control", "no-store, no-cache, must-revalidate");
-    res.set("Pragma", "no-cache");
-    res.set("Expires", "0");
+    const btc =
+      await readEndpoint("/btc");
+
+    const usdchf =
+      await readEndpoint("/usdchf");
+
+    const eurusd =
+      await readEndpoint("/eurusd");
+
+
+    // 强制检查，防止以后再次串 symbol
+
+    if (xau.symbol !== "XAUUSD") {
+      throw new Error(
+        "XAU ERROR: received " +
+        xau.symbol
+      );
+    }
+
+    if (btc.symbol !== "BTCUSD") {
+      throw new Error(
+        "BTC ERROR: received " +
+        btc.symbol
+      );
+    }
+
+    if (usdchf.symbol !== "USDCHF") {
+      throw new Error(
+        "USDCHF ERROR: received " +
+        usdchf.symbol
+      );
+    }
+
+    if (eurusd.symbol !== "EURUSD") {
+      throw new Error(
+        "EURUSD ERROR: received " +
+        eurusd.symbol
+      );
+    }
+
+
+    res.set(
+      "Access-Control-Allow-Origin",
+      "*"
+    );
+
+    res.set(
+      "Cache-Control",
+      "no-store, no-cache, must-revalidate"
+    );
+
 
     res.json({
 
