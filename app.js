@@ -3,283 +3,162 @@ const express = require("express");
 const app = express();
 const port = process.env.PORT || 10000;
 
-const worker =
+const base =
   "https://dry-wildflower-2347.leongcheekuan84.workers.dev";
 
-const renderBase =
-  "https://fmp-market-bridge.onrender.com";
-
-
-// ======================================================
-// PROXY
-// ======================================================
-
-async function proxy(url, res) {
-  try {
-    const r = await fetch(url);
-
-    const body = Buffer.from(
-      await r.arrayBuffer()
-    );
-
-    res.status(r.status);
-
-    res.set(
-      "Content-Type",
-      r.headers.get("content-type") ||
-      "application/json"
-    );
-
-    res.set(
-      "Access-Control-Allow-Origin",
-      "*"
-    );
-
-    res.set(
-      "Cache-Control",
-      "no-store"
-    );
-
-    res.send(body);
-
-  } catch (e) {
-
-    res.status(502).json({
-      ok: false,
-      error: e.message
-    });
-
-  }
-}
-
-
-// ======================================================
-// 原本已经验证成功的四个接口
-// ======================================================
-
-app.get("/xau", async (req, res) => {
-
-  await proxy(
-    worker + "/symbol=XAUUSD",
-    res
-  );
-
-});
-
-
-app.get("/btc", async (req, res) => {
-
-  await proxy(
-    worker + "/symbol=BTCUSD",
-    res
-  );
-
-});
-
-
-app.get("/usdchf", async (req, res) => {
-
-  await proxy(
-    worker + "/symbol=USDCHF",
-    res
-  );
-
-});
-
-
-app.get("/eurusd", async (req, res) => {
-
-  await proxy(
-    worker + "/symbol=EURUSD",
-    res
-  );
-
-});
-
-
-// ======================================================
-// 读取 Render 自己已经验证成功的接口
-// ======================================================
-
-async function readEndpoint(endpoint) {
-
-  const url =
-    renderBase +
-    endpoint +
-    "?t=" +
-    Date.now() +
-    "-" +
-    Math.random();
+async function getSymbol(symbol) {
+  const url = `${base}/?symbol=${encodeURIComponent(symbol)}`;
 
   const r = await fetch(url, {
     headers: {
-      "Accept": "application/json",
-      "Cache-Control": "no-cache"
+      Accept: "application/json",
+      "User-Agent": "FMP-Market-Bridge/1.0"
     }
   });
 
   if (!r.ok) {
-
-    throw new Error(
-      endpoint +
-      " returned HTTP " +
-      r.status
-    );
-
+    throw new Error(`Worker HTTP ${r.status}`);
   }
 
-  return await r.json();
+  const data = await r.json();
+
+  if (!data || data.ok !== true) {
+    throw new Error(`${symbol} upstream error`);
+  }
+
+  const received = String(data.symbol || "").toUpperCase();
+
+  if (received !== symbol.toUpperCase()) {
+    throw new Error(
+      `${symbol} ERROR: received ${received || "UNKNOWN"}`
+    );
+  }
+
+  return data;
+}
+
+async function sendSymbol(symbol, res) {
+  try {
+    const data = await getSymbol(symbol);
+
+    res.set("Access-Control-Allow-Origin", "*");
+    res.set("Cache-Control", "no-store");
+    res.json(data);
+  } catch (e) {
+    res.status(502).json({
+      ok: false,
+      symbol,
+      error: e.message
+    });
+  }
 }
 
 
-// ======================================================
-// ALL
-// ======================================================
+// =========================
+// 四个固定接口
+// =========================
 
-app.get("/all", async (req, res) => {
+app.get("/xau", async (req, res) => {
+  await sendSymbol("XAUUSD", res);
+});
 
-  try {
+app.get("/btc", async (req, res) => {
+  await sendSymbol("BTCUSD", res);
+});
 
-    const xau =
-      await readEndpoint("/xau");
+app.get("/usdchf", async (req, res) => {
+  await sendSymbol("USDCHF", res);
+});
 
-    const btc =
-      await readEndpoint("/btc");
-
-    const usdchf =
-      await readEndpoint("/usdchf");
-
-    const eurusd =
-      await readEndpoint("/eurusd");
-
-
-    // 强制检查，防止以后再次串 symbol
-
-    if (xau.symbol !== "XAUUSD") {
-      throw new Error(
-        "XAU ERROR: received " +
-        xau.symbol
-      );
-    }
-
-    if (btc.symbol !== "BTCUSD") {
-      throw new Error(
-        "BTC ERROR: received " +
-        btc.symbol
-      );
-    }
-
-    if (usdchf.symbol !== "USDCHF") {
-      throw new Error(
-        "USDCHF ERROR: received " +
-        usdchf.symbol
-      );
-    }
-
-    if (eurusd.symbol !== "EURUSD") {
-      throw new Error(
-        "EURUSD ERROR: received " +
-        eurusd.symbol
-      );
-    }
-
-
-    res.set(
-      "Access-Control-Allow-Origin",
-      "*"
-    );
-
-    res.set(
-      "Cache-Control",
-      "no-store, no-cache, must-revalidate"
-    );
-
-
-    res.json({
-
-      ok: true,
-
-      generated_at:
-        new Date().toISOString(),
-
-      symbols: {
-        xau: xau.symbol,
-        btc: btc.symbol,
-        usdchf: usdchf.symbol,
-        eurusd: eurusd.symbol
-      },
-
-      data: {
-        xau,
-        btc,
-        usdchf,
-        eurusd
-      }
-
-    });
-
-  } catch (e) {
-
-    res.status(502).json({
-      ok: false,
-      error: e.message
-    });
-
-  }
-
+app.get("/eurusd", async (req, res) => {
+  await sendSymbol("EURUSD", res);
 });
 
 
-// ======================================================
-// HEALTH
-// ======================================================
+// =========================
+// 一次读取四个品种
+// =========================
+
+app.get("/all", async (req, res) => {
+  try {
+    const symbols = [
+      "XAUUSD",
+      "BTCUSD",
+      "USDCHF",
+      "EURUSD"
+    ];
+
+    const results = await Promise.allSettled(
+      symbols.map(symbol => getSymbol(symbol))
+    );
+
+    const output = {};
+
+    symbols.forEach((symbol, i) => {
+      const result = results[i];
+
+      if (result.status === "fulfilled") {
+        output[symbol] = result.value;
+      } else {
+        output[symbol] = {
+          ok: false,
+          symbol,
+          error: result.reason.message
+        };
+      }
+    });
+
+    res.set("Access-Control-Allow-Origin", "*");
+    res.set("Cache-Control", "no-store");
+
+    res.json({
+      ok: true,
+      generated_at: new Date().toISOString(),
+      markets: output
+    });
+
+  } catch (e) {
+    res.status(500).json({
+      ok: false,
+      error: e.message
+    });
+  }
+});
+
+
+// =========================
+// Health
+// =========================
 
 app.get("/health", (req, res) => {
-
   res.json({
     ok: true,
     service: "fmp-market-bridge",
     time: new Date().toISOString()
   });
-
 });
 
 
-// ======================================================
-// HOME
-// ======================================================
+// =========================
+// 首页
+// =========================
 
 app.get("/", (req, res) => {
-
   res.json({
-
     ok: true,
-
-    service:
-      "FMP Market Bridge",
-
+    service: "FMP Market Bridge",
     endpoints: [
-      "/all",
       "/xau",
       "/btc",
       "/usdchf",
       "/eurusd",
+      "/all",
       "/health"
     ]
-
   });
-
 });
 
 
-// ======================================================
-// START
-// ======================================================
-
 app.listen(port, () => {
-
-  console.log(
-    `FMP Market Bridge running on port ${port}`
-  );
-
+  console.log(`FMP Market Bridge running on port ${port}`);
 });
